@@ -14,6 +14,14 @@ import org.springframework.web.context.request.async.WebAsyncTask;
 
 import demo.sync.boot.service.HelloService;
 
+/**
+ * 
+ * spring boot--使用异步请求，提高系统的吞吐量
+ * 
+ * 
+ * @author wangyx
+ *
+ */
 @RestController
 public class SyncController {
 
@@ -74,7 +82,6 @@ public class SyncController {
 		
 		// 3s钟没返回，则认为超时
 		WebAsyncTask<String> webAsyncTask = new WebAsyncTask<>(3000, new Callable<String>() {
-
 			@Override
 			public String call() throws Exception {
 				System.err.println(Thread.currentThread().getName() + " 进入call方法");
@@ -87,7 +94,6 @@ public class SyncController {
 		System.err.println(Thread.currentThread().getName() + " 从helloController方法返回");
 
 		webAsyncTask.onCompletion(new Runnable() {
-
 			@Override
 			public void run() {
 				System.err.println(Thread.currentThread().getName() + " 执行完毕");
@@ -95,7 +101,6 @@ public class SyncController {
 		});
 
 		webAsyncTask.onTimeout(new Callable<String>() {
-
 			@Override
 			public String call() throws Exception {
 				System.err.println(Thread.currentThread().getName() + " onTimeout");
@@ -103,6 +108,7 @@ public class SyncController {
 				throw new TimeoutException("调用超时");
 			}
 		});
+		
 		return webAsyncTask;
 	}
 
@@ -115,7 +121,6 @@ public class SyncController {
 	public WebAsyncTask<String> exceptionController() {
 		System.err.println(Thread.currentThread().getName() + " 进入helloController方法");
 		Callable<String> callable = new Callable<String>() {
-
 			@Override
 			public String call() throws Exception {
 				System.err.println(Thread.currentThread().getName() + " 进入call方法");

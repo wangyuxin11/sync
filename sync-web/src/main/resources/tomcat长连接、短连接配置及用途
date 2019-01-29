@@ -1,0 +1,71 @@
+
+
+1.WEB应用有很多，下面就两个典型的应用(管理页面和接口服务)做对比。
+
+    管理页面：多涉及到用户的登录和长时间的频繁操作处理，这些操作都集中在一个session中，建议采用长连接；
+
+    接口服务：比如常见的webservice,操作集中在很短时间内完成，不需要对session进行维护，建议采用短连接。
+
+ 
+
+2.TOMCAT长短连接配置
+
+    TOMCAT长短连接配置，主要在server.xml中修改。
+
+    1）对于管理业务，涉及到session的维护，采用长连接配置如下：
+
+          <Connector port=”8080″ protocol=”HTTP/1.1″
+
+               maxThreads=”1000″ acceptCount=”100″
+
+               useBodyEncodingForURI=”true”
+
+               enableLookups=”false”
+
+               compression=”on”
+
+               compressionMinSize=”2048″
+
+               compressableMimeType=”text/html,text/xml,text/javascript,text/css,text/plain”
+
+               redirectPort=”8443″ URIEncoding=”UTF-8″ />
+
+ 
+
+     2)对于接口服务，不涉及session的维护，采用短连接配置如下：
+
+            <Connector port=”8080″ protocol=”HTTP/1.1″
+
+               connectionTimeout=”20000″
+
+               maxThreads=”1000″
+
+               acceptCount=”100″
+
+               redirectPort=”8443″
+
+               URIEncoding=”UTF-8″
+
+               maxKeepAliveRequests=”5″/>
+
+      3)原理：HTTP1.1默认采用长连接，需要去掉长连接的话，只需修改默认配置参数maxKeepAliveRequests，上面maxKeepAliveRequests=”5″是指，意思是每个连接只响应5个请求，然后就shutdown连接.
+
+ 
+
+3.Apache优化之KeepAlive(http://wenku.baidu.com/link?url=szoQzO_yrnz6dHV5vJsdlYJ0l72RESv-MwLEVdQGjGIueiQ5hDme3vTlNNBNDskU1Rwe8La6ZhSkNRnd3M4AzXROBCU8fjMeGqMn03-59Si)
+
+    1)KeepAlive是在HTTP1.1中定义的，用来保持客户机和服务器的长连接，通过减少建立TCP Session的次数来提高性能。
+
+     2)常用的配置参数有{KeepAlive, KeepAliveTimeout, MaxKeepAliveRequests}
+
+         KeepAlive是决定开启KeepAlive支持;
+
+         KeepAliveTimeout决定一 个KeepAlive的连接能保持多少时间，Timeout就尽快shutdown链接，若还有数据必须再建立新的连接了;
+
+         MaxKeepAliveRequests于KeepAliveTimeout相似，意思是服务多少个请求就shutdown连接。
+
+      3)对于KeepAlive的配置需要慎重，错误的参数可能导致严重的性能问题。
+
+         一个高负载的Server，如果建立的很多长连接将无法继续服 务新的连接。因此需要根据server的性质调整KeepAliveTimeout或是MaxKeepAliveRequests的值。
+
+          例如：你的网页上有三幅图画2个外部javascript，他们都存放在你自己的server上。因此将 MaxKeepAliveRequests设置为7比较合适。3幅图2个js各一个link，网页本身一个link，还有firefox传说中的 favicon.ico。当然还是要有KeepAliveTimeout的。如果客户机用了该死的IE并且设置了某个该死的选项，IE是不会向服务器发送 HEAD请求查看图片（或是其他资源）是否过期的，而是直接使用本地图片。这个时候服务器是不会计算Request的(因为压根就没有Request 嘛)。再如果只有MaxKeepAliveRequests参数，服务器会默认等待5秒才结束KeepAlive连接。

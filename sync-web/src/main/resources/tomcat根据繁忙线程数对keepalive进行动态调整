@@ -1,0 +1,26 @@
+https://blog.csdn.net/p312011150/article/details/81295672
+
+
+tomcat根据繁忙线程数对keepalive进行动态调整
+
+众所周知，Keep-Alive功能使客户端到服务器端的连接持续有效，当出现对服务器的后继请求时，Keep-Alive功能避免了建立或者重新建立连接。我们经常所用的tomcat服务器就支持HTTP Keep-Alive。在http1.1中，keepalive默认是开启的。如果需要自定义配置keepalive参数，我们可以在tomcat的server.xml中做如下配置：
+
+<Connector port="8080" protocol="HTTP/1.1"
+　　　　　　　　　　　　　　maxThreads="600"
+　　　　　　　　　　　　　　minSpareThreads="100"
+　　　　　　　　　　　　　　acceptCount="700"
+
+                                        maxConnections="300" //与tomcat建立的最大socket连接数
+　　　　　　　　　　　　　　connectionTimeout="20000"
+
+                                        maxKeppAliveRequests="100"  //请求个数超过这个数，强制关闭掉socket链接
+
+                                        keepAliveTimeOut="60000"  //下次请求过来之前，socket链接保持多久
+　　　　　　　　　　　　　　redirectPort="8443" 
+　　　　　　　　　　　　　　URIEncoding="utf-8"
+
+　　/>
+
+但是tomcat在实际处理请求的过程中会根据工作线程池中繁忙线程数动态的对keepalive进行开启或者关闭，tomcat源码如下：
+
+在org.apache.coyote.http11.AbstractHttp11Processor这个类的process方法中可以看到

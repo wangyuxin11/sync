@@ -1,0 +1,40 @@
+https://blog.csdn.net/nimasike/article/details/81129163
+
+在http1.1中可以配置服务器端开启keepalive与客户端保持长连接进行优化，这里不过多解释。
+
+我们在nginx.conf配置
+
+        upstream favtomcat {
+           server 192.168.80.112:8080;
+           keepalive 20;
+        }
+
+    keepalive_timeout  65s;
+    keepalive_requests 100;
+
+keepalive_timeout：65s ##设置nginx开启keepalive，超时时间为65秒，也就是说：如果客户端65秒内没有后续的请求过来，nginx就会断掉这个TCP连接，设置为0表示禁用keepalive。
+
+keepalive_requests :100 ##设置长连接能够处理请求的次数，100表示：一个长连接nginx最多处理100次请求就会关闭。
+
+keepalive : 20 ##这个值必须设置，默认为0. 设置每个worker可以保持长连接空闲时的最大连接数。
+
+这里需要特别解释一下，假设nginx有100个请求需要访问Tomcat，那么会建立100个连接，如果双方都支持keepalive，那么这100个连接都是长连接（可以复用那种的），当请求结束后，nginx会立马销毁 80个（100-20），只剩下20个长连接，这20个长连接在Tomcat的keepAliveTimeout时间到期后由Tomcat方关闭。
+
+Tomcat的 keepAliveTimeout这个值可以设置大一些，性能会很好，比如设置个10分钟，20分钟的。
+
+ 
+
+完事大吉，我们来测试。
+
+192.168.80.110 Nginx
+
+192.168.80.112 Tomcat
+
+192.168.80.1  客户端Chrome浏览器
+
+我们在浏览器疯狂刷新Nginx ，为了让浏览器启动最多的连接，我放了一大推的图片，并且图片URL后面加随机数，防止浏览器缓存。
+
+
+
+
+

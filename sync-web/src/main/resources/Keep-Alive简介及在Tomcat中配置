@@ -1,0 +1,13 @@
+ Keep-Alive功能使客户端到服务器端的连接持续有效，当出现对服务器的后继请求时，Keep-Alive功能避免了建立或者重新建立连接。市场上 的大部分Web服务器，包括iPlanet、IIS和Apache，都支持HTTP Keep-Alive。对于提供静态内容的网站来说，这个功能通常很有用。但是，对于负担较重的网站来说，这里存在另外一个问题：虽然为客户保留打开的连 接有一定的好处，但它同样影响了性能，因为在处理暂停期间，本来可以释放的资源仍旧被占用。当Web服务器和应用服务器在同一台机器上运行时，Keep-Alive功能对资源利用的影响尤其突出。 此功能为HTTP 1.1预设的功能，HTTP 1.0加上Keep-Alive header也可以提供HTTP的持续作用功能。 
+Keep-Alive: timeout=5, max=100 
+timeout：过期时间5秒（对应httpd.conf里的参数是：KeepAliveTimeout），max是最多一百次请求，强制断掉连接 
+就是在timeout时间内又有新的连接过来，同时max会自动减1，直到为0，强制断掉。 
+Tomcat中的相关设置,在server.xml 中的Connector 元素中。 
+keepAliveTimeout： 
+此时间过后连接就close了，单位是milliseconds 
+maxKeepAliveRequests： 
+
+最大长连接个数（1表示禁用，-1表示不限制个数，默认100个。一般设置在100~200之间）. 
+
+
+maxKeepAliveRequests="1"就可以避免tomcat产生大量的TIME_WAIT连接，从而从一定程度上避免tomcat假死。 
