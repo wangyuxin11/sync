@@ -1,0 +1,309 @@
+https://blog.csdn.net/liuchuanhong1/article/details/78744138
+
+spring boot--使用异步请求，提高系统的吞吐量
+
+前言：
+
+在我们的实际生产中，常常会遇到下面的这种情况，某个请求非常耗时(大约5s返回)，当大量的访问该请求的时候，再请求其他服务时，会造成没有连接使用的情况，造成这种现象的主要原因是，我们的容器(tomcat)中线程的数量是一定的，例如500个，当这500个线程都用来请求服务的时候，再有请求进来，就没有多余的连接可用了，只能拒绝连接。要是我们在请求耗时服务的时候，能够异步请求(请求到controller中时，则容器线程直接返回，然后使用系统内部的线程来执行耗时的服务，等到服务有返回的时候，再将请求返回给客户端)，那么系统的吞吐量就会得到很大程度的提升了。当然，大家可以直接使用Hystrix的资源隔离来实现，今天我们的重点是spring mvc是怎么来实现这种异步请求的。
+
+一、使用Callable来实现
+
+controller如下：
+----------------------------------------------------------------------------------- 
+
+@RestController
+public class HelloController {
+ 
+	private static final Logger logger = LoggerFactory.getLogger(HelloController.class);
+	
+	@Autowired
+	private HelloService hello;
+ 
+	@GetMapping("/helloworld")
+	public String helloWorldController() {
+		return hello.sayHello();
+	}
+ 
+	/**
+	 * 异步调用restful
+	 * 当controller返回值是Callable的时候，springmvc就会启动一个线程将Callable交给TaskExecutor去处理
+	 * 然后DispatcherServlet还有所有的spring拦截器都退出主线程，然后把response保持打开的状态
+	 * 当Callable执行结束之后，springmvc就会重新启动分配一个request请求，然后DispatcherServlet就重新
+	 * 调用和处理Callable异步执行的返回结果， 然后返回视图
+	 * 
+	 * @return
+	 */
+	@GetMapping("/hello")
+	public Callable<String> helloController() {
+		logger.info(Thread.currentThread().getName() + " 进入helloController方法");
+		Callable<String> callable = new Callable<String>() {
+			@Override
+			public String call() throws Exception {
+				logger.info(Thread.currentThread().getName() + " 进入call方法");
+				String say = hello.sayHello();
+				logger.info(Thread.currentThread().getName() + " 从helloService方法返回");
+				return say;
+			}
+		};
+		logger.info(Thread.currentThread().getName() + " 从helloController方法返回");
+		return callable;
+	}
+}
+---------------------------------------------------
+
+我们首先来看下上面这两个请求的区别
+
+下面这个是没有使用异步请求的
+
+2017-12-07 18:05:42.351  INFO 3020 --- [nio-8060-exec-5] c.travelsky.controller.HelloController   : http-nio-8060-exec-5 进入helloWorldController方法
+2017-12-07 18:05:42.351  INFO 3020 --- [nio-8060-exec-5] com.travelsky.service.HelloService       : http-nio-8060-exec-5 进入sayHello方法!
+2017-12-07 18:05:44.351  INFO 3020 --- [nio-8060-exec-5] c.travelsky.controller.HelloController   : http-nio-8060-exec-5 从helloWorldController方法返回
+
+
+我们可以看到，请求从头到尾都只有一个线程，并且整个请求耗费了2s钟的时间。
+下面，我们再来看下使用Callable异步请求的结果：
+
+2017-12-07 18:11:55.671  INFO 6196 --- [nio-8060-exec-1] c.travelsky.controller.HelloController   : http-nio-8060-exec-1 进入helloController方法
+2017-12-07 18:11:55.672  INFO 6196 --- [nio-8060-exec-1] c.travelsky.controller.HelloController   : http-nio-8060-exec-1 从helloController方法返回
+2017-12-07 18:11:55.676  INFO 6196 --- [nio-8060-exec-1] c.t.i.MyAsyncHandlerInterceptor          : http-nio-8060-exec-1 进入afterConcurrentHandlingStarted方法
+2017-12-07 18:11:55.676  INFO 6196 --- [      MvcAsync1] c.travelsky.controller.HelloController   : MvcAsync1 进入call方法
+2017-12-07 18:11:55.676  INFO 6196 --- [      MvcAsync1] com.travelsky.service.HelloService       : MvcAsync1 进入sayHello方法!
+2017-12-07 18:11:57.677  INFO 6196 --- [      MvcAsync1] c.travelsky.controller.HelloController   : MvcAsync1 从helloService方法返回
+2017-12-07 18:11:57.721  INFO 6196 --- [nio-8060-exec-2] c.t.i.MyAsyncHandlerInterceptor          : http-nio-8060-exec-2服务调用完成，返回结果给客户端
+
+
+从上面的结果中，我们可以看出，容器的线程http-nio-8060-exec-1这个线程进入controller之后，就立即返回了，具体的服务调用是通过MvcAsync2这个线程来做的，当服务执行完要返回后，容器会再启一个新的线程http-nio-8060-exec-2来将结果返回给客户端或浏览器，整个过程response都是打开的，当有返回的时候，再从server端推到response中去。
+
+
+1、异步调用的另一种方式
+
+上面的示例是通过callable来实现的异步调用，其实还可以通过WebAsyncTask，也能实现异步调用，下面看示例：
+--------------------- 
+
+
+@RestController
+public class HelloController {
+
+	private static final Logger logger = LoggerFactory.getLogger(HelloController.class);
+	
+	@Autowired
+	private HelloService hello;
+
+              /**
+	 * 带超时时间的异步请求 通过WebAsyncTask自定义客户端超时间
+	 * 
+	 * @return
+	 */
+	@GetMapping("/world")
+	public WebAsyncTask<String> worldController() {
+		logger.info(Thread.currentThread().getName() + " 进入helloController方法");
+ 
+		// 3s钟没返回，则认为超时
+		WebAsyncTask<String> webAsyncTask = new WebAsyncTask<>(3000, new Callable<String>() {
+ 
+			@Override
+			public String call() throws Exception {
+				logger.info(Thread.currentThread().getName() + " 进入call方法");
+				String say = hello.sayHello();
+				logger.info(Thread.currentThread().getName() + " 从helloService方法返回");
+				return say;
+			}
+		});
+
+		logger.info(Thread.currentThread().getName() + " 从helloController方法返回");
+ 
+		webAsyncTask.onCompletion(new Runnable() {
+ 
+			@Override
+			public void run() {
+				logger.info(Thread.currentThread().getName() + " 执行完毕");
+			}
+		});
+ 
+		webAsyncTask.onTimeout(new Callable<String>() {
+ 
+			@Override
+			public String call() throws Exception {
+				logger.info(Thread.currentThread().getName() + " onTimeout");
+				// 超时的时候，直接抛异常，让外层统一处理超时异常
+				throw new TimeoutException("调用超时");
+			}
+		});
+		return webAsyncTask;
+	}
+ 
+	/**
+	 * 异步调用，异常处理，详细的处理流程见MyExceptionHandler类
+	 * 
+	 * @return
+	 */
+	@GetMapping("/exception")
+	public WebAsyncTask<String> exceptionController() {
+		logger.info(Thread.currentThread().getName() + " 进入helloController方法");
+		Callable<String> callable = new Callable<String>() {
+ 
+			@Override
+			public String call() throws Exception {
+				logger.info(Thread.currentThread().getName() + " 进入call方法");
+				throw new TimeoutException("调用超时!");
+			}
+		};
+		logger.info(Thread.currentThread().getName() + " 从helloController方法返回");
+		return new WebAsyncTask<>(20000, callable);
+	}
+}
+----------------------------------------------------
+
+运行结果如下： 
+
+2017-12-07 19:10:26.582  INFO 6196 --- [nio-8060-exec-4] c.travelsky.controller.HelloController   : http-nio-8060-exec-4 进入helloController方法
+2017-12-07 19:10:26.585  INFO 6196 --- [nio-8060-exec-4] c.travelsky.controller.HelloController   : http-nio-8060-exec-4 从helloController方法返回
+2017-12-07 19:10:26.589  INFO 6196 --- [nio-8060-exec-4] c.t.i.MyAsyncHandlerInterceptor          : http-nio-8060-exec-4 进入afterConcurrentHandlingStarted方法
+2017-12-07 19:10:26.591  INFO 6196 --- [      MvcAsync2] c.travelsky.controller.HelloController   : MvcAsync2 进入call方法
+2017-12-07 19:10:26.591  INFO 6196 --- [      MvcAsync2] com.travelsky.service.HelloService       : MvcAsync2 进入sayHello方法!
+2017-12-07 19:10:28.591  INFO 6196 --- [      MvcAsync2] c.travelsky.controller.HelloController   : MvcAsync2 从helloService方法返回
+2017-12-07 19:10:28.600  INFO 6196 --- [nio-8060-exec-5] c.t.i.MyAsyncHandlerInterceptor          : http-nio-8060-exec-5服务调用完成，返回结果给客户端
+2017-12-07 19:10:28.601  INFO 6196 --- [nio-8060-exec-5] c.travelsky.controller.HelloController   : http-nio-8060-exec-5 执行完毕
+
+
+这种方式和上面的callable方式最大的区别就是，WebAsyncTask支持超时，并且还提供了两个回调函数，分别是onCompletion和onTimeout，顾名思义，这两个回调函数分别在执行完成和超时的时候回调。
+
+
+3、Deferred方式实现异步调用
+
+在我们是生产中，往往会遇到这样的情景，controller中调用的方法很多都是和第三方有关的，例如JMS，定时任务，队列等，拿JMS来说，比如controller里面的服务需要从JMS中拿到返回值，才能给客户端返回，而从JMS拿值这个过程也是异步的，这个时候，我们就可以通过Deferred来实现整个的异步调用。
+
+首先，我们来模拟一个长时间调用的任务，代码如下：
+
+
+@Component
+public class LongTimeTask {
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	@Async
+	public void execute(DeferredResult<String> deferred){
+		logger.info(Thread.currentThread().getName() + "进入 taskService 的 execute方法");
+		try {
+			// 模拟长时间任务调用，睡眠2s
+			TimeUnit.SECONDS.sleep(2);
+
+			// 2s后给Deferred发送成功消息，告诉Deferred，我这边已经处理完了，可以返回给客户端了
+			deferred.setResult("world");
+
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+}
+
+
+接着，我们就来实现异步调用，controller如下：
+
+
+@RestController
+public class AsyncDeferredController {
+    private final Logger logger = LoggerFactory.getLogger(this.getClass());
+    private final LongTimeTask taskService;
+    
+    @Autowired
+    public AsyncDeferredController(LongTimeTask taskService) {
+        this.taskService = taskService;
+    }
+    
+    @GetMapping("/deferred")
+    public DeferredResult<String> executeSlowTask() {
+        logger.info(Thread.currentThread().getName() + "进入executeSlowTask方法");
+        DeferredResult<String> deferredResult = new DeferredResult<>();
+        // 调用长时间执行任务
+        taskService.execute(deferredResult);
+        // 当长时间任务中使用deferred.setResult("world");这个方法时，会从长时间任务中返回，继续controller里面的流程
+        logger.info(Thread.currentThread().getName() + "从executeSlowTask方法返回");
+        // 超时的回调方法
+        deferredResult.onTimeout(new Runnable(){
+			@Override
+			public void run() {
+				logger.info(Thread.currentThread().getName() + " onTimeout");
+				// 返回超时信息
+				deferredResult.setErrorResult("time out!");
+			}
+		});
+        
+        // 处理完成的回调方法，无论是超时还是处理成功，都会进入这个回调方法
+        deferredResult.onCompletion(new Runnable(){
+		
+			@Override
+			public void run() {
+				logger.info(Thread.currentThread().getName() + " onCompletion");
+			}
+		});
+        
+        return deferredResult;
+    }
+}
+
+执行结果如下：
+
+2017-12-07 19:25:40.192  INFO 6196 --- [nio-8060-exec-7] c.t.controller.AsyncDeferredController   : http-nio-8060-exec-7进入executeSlowTask方法
+2017-12-07 19:25:40.193  INFO 6196 --- [nio-8060-exec-7] .s.a.AnnotationAsyncExecutionInterceptor : No TaskExecutor bean found for async processing
+2017-12-07 19:25:40.194  INFO 6196 --- [nio-8060-exec-7] c.t.controller.AsyncDeferredController   : http-nio-8060-exec-7从executeSlowTask方法返回
+2017-12-07 19:25:40.198  INFO 6196 --- [nio-8060-exec-7] c.t.i.MyAsyncHandlerInterceptor          : http-nio-8060-exec-7 进入afterConcurrentHandlingStarted方法
+2017-12-07 19:25:40.202  INFO 6196 --- [cTaskExecutor-1] com.travelsky.controller.LongTimeTask    : SimpleAsyncTaskExecutor-1进入 taskService 的 execute方法
+2017-12-07 19:25:42.212  INFO 6196 --- [nio-8060-exec-8] c.t.i.MyAsyncHandlerInterceptor          : http-nio-8060-exec-8服务调用完成，返回结果给客户端
+2017-12-07 19:25:42.213  INFO 6196 --- [nio-8060-exec-8] c.t.controller.AsyncDeferredController   : http-nio-8060-exec-8 onCompletion
+
+
+从上面的执行结果不难看出，容器线程会立刻返回，应用程序使用线程池里面的cTaskExecutor-1线程来完成长时间任务的调用，当调用完成后，容器又启了一个连接线程，来返回最终的执行结果。
+
+
+这种异步调用，在容器线程资源非常宝贵的时候，能够大大的提高整个系统的吞吐量。
+
+
+ps：异步调用可以使用AsyncHandlerInterceptor进行拦截，使用示例如下：
+--------------------- 
+
+@Component
+public class MyAsyncHandlerInterceptor implements AsyncHandlerInterceptor {
+	
+	private static final Logger logger = LoggerFactory.getLogger(MyAsyncHandlerInterceptor.class);
+ 
+	@Override
+	public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
+			throws Exception {
+		return true;
+	}
+ 
+	@Override
+	public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler,
+			ModelAndView modelAndView) throws Exception {
+//		HandlerMethod handlerMethod = (HandlerMethod) handler;
+		logger.info(Thread.currentThread().getName()+ "服务调用完成，返回结果给客户端");
+	}
+ 
+	@Override
+	public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex)
+			throws Exception {
+		if(null != ex){
+			System.out.println("发生异常:"+ex.getMessage());
+		}
+	}
+ 
+	@Override
+	public void afterConcurrentHandlingStarted(HttpServletRequest request, HttpServletResponse response, Object handler)
+			throws Exception {
+		// 拦截之后，重新写回数据，将原来的hello world换成如下字符串
+		String resp = "my name is chhliu!";
+		response.setContentLength(resp.length());
+		response.getOutputStream().write(resp.getBytes());
+		
+		logger.info(Thread.currentThread().getName() + " 进入afterConcurrentHandlingStarted方法");
+	}
+}
+
+--------------------- 
+
+
+有兴趣的可以了解下，本篇博客的主题是异步调用，其他的相关知识点，会在下一篇博客中进行讲解。 
+
+
+
+
+
